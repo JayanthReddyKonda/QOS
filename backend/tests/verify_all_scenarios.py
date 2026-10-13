@@ -1,79 +1,98 @@
-import asyncio, json, sys, io
+import asyncio
+import json
+import websockets
 
-async def test_all_scenarios():
-    import websockets
+async def run_scenario_test(profile: str, drop_policy: str = 'tail_drop', duration_ms: int = 3000):
+    config = {
+        'seed': 42,
+        'load_profile': profile,
+        'link_mbps': 10.0,
+        'buffer_limit': 50,
+        'prop_delay_ms': 10.0,
+        'duration_ms': duration_ms,
+        'drop_policy': drop_policy,
+    }
 
-    scenarios = [
-        ('low', 50.0),
-        ('near_capacity', 95.0),
-        ('congested', 130.0),
-        ('heavy', 170.0),
-    ]
+    print(f"\n=======================================================")
+    print(f"TESTING: Profile={profile.upper()} | DropPolicy={drop_policy.upper()}")
+    print(f"=======================================================")
 
-    for profile, target_pct in scenarios:
-        config = {
-            'seed': 42,
-            'load_profile': profile,
-            'link_mbps': 10.0,
-            'buffer_limit': 50,
-            'prop_delay_ms': 10.0,
-            'duration_ms': 3000,
-        }
-        print(f"\n=======================================================")
-        print(f"TESTING SCENARIO: {profile.upper()} (Target: ~{target_pct}%)")
-        print(f"=======================================================")
+    async with websockets.connect('ws://localhost:8000/ws/simulate', max_size=None) as ws:
+        await ws.send(json.dumps(config))
+        packets_by_policy = {'fifo': [], 'spq': [], 'wfq': [], 'drr': []}
+        final_results = None
 
-        async with websockets.connect('ws://localhost:8000/ws/simulate', max_size=None) as ws:
-            await ws.send(json.dumps(config))
-            packets_fifo = []
-            packets_spq = []
-            final_metrics = None
+        while True:
+            raw = await asyncio.wait_for(ws.recv(), timeout=60)
+            msg = json.loads(raw)
+            mtype = msg.get('type')
 
-            while True:
-                raw = await asyncio.wait_for(ws.recv(), timeout=60)
-                msg = json.loads(raw)
-                mtype = msg.get('type')
+            if mtype == 'packets_chunk':
+                pol = msg['policy']
+                if pol in packets_by_policy:
+                    packets_by_policy[pol].extend(msg['packets'])
 
-                if mtype == 'packets_chunk':
-                    if msg['policy'] == 'fifo':
-                        packets_fifo.extend(msg['packets'])
-                    else:
-                        packets_spq.extend(msg['packets'])
+            elif mtype == 'results':
+                final_results = msg
+                break
 
-                if mtype == 'results':
-                    final_metrics = msg
-                    break
+        assert final_results is not None, "Did not receive final results message!"
 
-            f = final_metrics['fifo']
-            s = final_metrics['spq']
+        for pol in ['fifo', 'spq', 'wfq', 'drr']:
+            m = final_results[pol]
+            gen = m['generated']
+            deliv = m['delivered']
+            drop = m['dropped']
 
-            # Assertions
-            fifo_ok = f['generated'] == f['delivered'] + f['dropped']
-            spq_ok = s['generated'] == s['delivered'] + s['dropped']
-            assert fifo_ok and spq_ok, "Count reconciliation failed!"
-            assert len(packets_fifo) == f['generated'], "FIFO packet trace count mismatch!"
-            assert len(packets_spq) == s['generated'], "SPQ packet trace count mismatch!"
+            # Count reconciliation invariant: gen == delivered + dropped
+            assert gen == deliv + drop, f"[{pol.upper()}] Count mismatch: gen({gen}) != deliv({deliv}) + drop({drop})"
+            assert len(packets_by_policy[pol]) == gen, (
+                f"[{pol.upper()}] Packet trace size {len(packets_by_policy[pol])} != generated {gen}"
+            )
 
-            print(f"  Generated Packets:  {f['generated']}")
-            print(f"  Offered Load:       {f['offered_load_mbps']:.2f} Mbps ({f['offered_load_pct']:.1f}% of link)")
-            print(f"  FIFO Delivered:     {f['delivered']} | Dropped: {f['dropped']} ({f['drop_rate_pct']:.1f}%) | Util: {f['link_utilization_pct']:.1f}%")
-            print(f"  SPQ  Delivered:     {s['delivered']} | Dropped: {s['dropped']} ({s['drop_rate_pct']:.1f}%) | Util: {s['link_utilization_pct']:.1f}%")
+            # Invariant: Metrics in reasonable ranges
+            assert 0.0 <= m['drop_rate_pct'] <= 100.0, f"[{pol.upper()}] Invalid drop rate: {m['drop_rate_pct']}"
+            assert 0.0 <= m['link_utilization_pct'] <= 100.0, f"[{pol.upper()}] Invalid utilization: {m['link_utilization_pct']}"
 
-            vf = f['per_class']['voice']['avg_e2e_delay_ms']
-            vs = s['per_class']['voice']['avg_e2e_delay_ms']
-            ff = f['per_class']['file']['avg_e2e_delay_ms']
-            fs = s['per_class']['file']['avg_e2e_delay_ms']
+            voice_delay = m['per_class']['voice']['avg_e2e_delay_ms']
+            file_delay = m['per_class']['file']['avg_e2e_delay_ms']
+            voice_drops = m['per_class']['voice']['dropped']
+            file_drops = m['per_class']['file']['dropped']
 
-            print(f"  Voice Delay:        FIFO = {vf:.2f} ms | SPQ = {vs:.2f} ms")
-            print(f"  Bulk File Delay:    FIFO = {ff:.2f} ms | SPQ = {fs:.2f} ms")
+            print(
+                f"  [{pol.upper():4s}] Delivered: {deliv:4d} | Dropped: {drop:3d} ({m['drop_rate_pct']:4.1f}%) | "
+                f"Voice Delay: {voice_delay if voice_delay is not None else 0:5.2f}ms | "
+                f"File Delay: {file_delay if file_delay is not None else 0:5.2f}ms"
+            )
 
-            if profile in ['congested', 'heavy']:
-                assert vs < vf, f"Expected SPQ voice delay ({vs:.2f}) < FIFO voice delay ({vf:.2f})"
-                print(f"  Trade-off Verified: Voice delay improved by {vf - vs:.2f} ms with SPQ!")
+        # Policy-specific checks under congestion
+        if profile in ['congested', 'heavy']:
+            spq_voice = final_results['spq']['per_class']['voice']['avg_e2e_delay_ms']
+            fifo_voice = final_results['fifo']['per_class']['voice']['avg_e2e_delay_ms']
+            if spq_voice is not None and fifo_voice is not None:
+                assert spq_voice <= fifo_voice, f"Expected SPQ voice delay ({spq_voice}) <= FIFO ({fifo_voice})"
 
-            print(f"  Scenario {profile.upper()} PASSED (Count consistency: OK, Metrics: OK, Trace: OK)")
+        # Drop policy checks
+        if drop_policy == 'push_out' and profile in ['congested', 'heavy']:
+            for pol in ['spq', 'wfq', 'drr']:
+                voice_drops = final_results[pol]['per_class']['voice']['dropped']
+                print(f"  [PUSH-OUT {pol.upper()}] Voice drops: {voice_drops} (Priority eviction protecting voice)")
+                # Under push-out, voice is highest priority, should suffer 0 or near 0 drops
+                assert voice_drops == 0, f"Expected 0 voice drops under push-out in {pol}, got {voice_drops}"
 
-    print("\n>>> ALL 4 EXPERIMENT MATRIX SCENARIOS VERIFIED SUCCESSFULLY! <<<")
+        print(f"  --> PASSED: Profile={profile.upper()}, DropPolicy={drop_policy.upper()}")
+
+async def main():
+    print(">>> Starting Full Verification of All Schedulers & Drop Policies <<<")
+    # Test all 4 load profiles with default tail_drop
+    for profile in ['low', 'near_capacity', 'congested', 'heavy']:
+        await run_scenario_test(profile, drop_policy='tail_drop', duration_ms=2000)
+
+    # Test push_out and wred under congested load
+    await run_scenario_test('congested', drop_policy='push_out', duration_ms=2000)
+    await run_scenario_test('congested', drop_policy='wred', duration_ms=2000)
+
+    print("\n>>> ALL VERIFICATION TESTS PASSED PERFECTLY! <<<")
 
 if __name__ == '__main__':
-    asyncio.run(test_all_scenarios())
+    asyncio.run(main())

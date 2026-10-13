@@ -151,7 +151,7 @@ export default function App() {
               <div className="p-5">
                 {activeTab === 'overview'   && <OverviewTab   results={sim.results} config={config} />}
                 {activeTab === 'comparison' && <ComparisonTab results={sim.results} />}
-                {activeTab === 'charts'     && <ChartsTab     results={sim.results} snapshots={sim.snapshots} />}
+                {activeTab === 'charts'     && <ChartsTab     results={sim.results} snapshots={sim.snapshots} config={config} />}
                 {activeTab === 'queue'      && <QueueTab      results={sim.results} />}
                 {activeTab === 'packets'    && <PacketTraceTab results={sim.results} />}
               </div>

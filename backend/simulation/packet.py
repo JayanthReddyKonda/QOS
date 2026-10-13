@@ -31,8 +31,8 @@ class Packet:
 
     def tx_duration_us(self, link_mbps: float) -> int:
         """Transmission time in microseconds: bits / (Mbps * 1e6) * 1e6."""
-        bits = self.payload_bytes * 8
-        return int(bits / (link_mbps * 1_000_000) * 1_000_000)
+        bits = self.payload_bytes * 8.0
+        return max(1, int(round(bits / max(0.1, link_mbps))))
 
     def to_dict(self) -> dict:
         return {

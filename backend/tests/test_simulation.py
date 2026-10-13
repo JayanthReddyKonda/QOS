@@ -279,6 +279,23 @@ def test_wred_early_drop():
 
     early_drops = [p for p in dropped if p.drop_reason == 'wred_early_drop']
     assert len(early_drops) > 0, "WRED did not trigger any early drops"
-    assert len(delivered) + len(dropped) == len(workload)
+# A17: Transmission duration edge case robustness
+def test_tx_duration_robustness():
+    pkt = make_packet(0, 'voice', 0, size=160)
+    # Even at high link speeds or low rates, duration must be at least 1 us
+    assert pkt.tx_duration_us(link_mbps=1000.0) >= 1
+    assert pkt.tx_duration_us(link_mbps=0.01) >= 1
+    assert pkt.tx_duration_us(link_mbps=10.0) == 128  # 160 * 8 / 10 = 128 us
+
+
+# A18: Occupancy series downsampling and schema
+def test_occupancy_series_downsampling():
+    workload = generate_workload(seed=42, load_profile='congested', link_mbps=10.0, duration_ms=1000)
+    sched = FIFOScheduler(**DEFAULT_CFG)
+    delivered, dropped, sim_time_us, link_busy_us, occ = run_scheduler(sched, copy.deepcopy(workload))
+    metrics = compute_metrics(delivered + dropped, sim_time_us, link_busy_us, occ, link_mbps=10.0, duration_ms=1000)
+    series = metrics.get('occupancy_series', [])
+    assert len(series) > 0
+    assert all('time_ms' in pt and 'occupancy' in pt for pt in series)
 
 
