@@ -16,36 +16,37 @@ export interface LiveEvent {
 
 export function useSimulation() {
   const [status, setStatus]             = useState<SimStatus>('idle');
-  const [progress, setProgress]         = useState<Record<PolicyType, number>>({ fifo: 0, spq: 0, wfq: 0 });
+  const [progress, setProgress]         = useState<Record<PolicyType, number>>({ fifo: 0, spq: 0, wfq: 0, drr: 0 });
   const [results, setResults]           = useState<SimResults | null>(null);
   const [error, setError]               = useState<string | null>(null);
-  const [snapshots, setSnapshots]       = useState<Record<PolicyType, QueueSnapshot[]>>({ fifo: [], spq: [], wfq: [] });
+  const [snapshots, setSnapshots]       = useState<Record<PolicyType, QueueSnapshot[]>>({ fifo: [], spq: [], wfq: [], drr: [] });
   const [totalPackets, setTotalPackets] = useState<number>(0);
-  const wsRef = useRef<WebSocket | null>(null);
-
-  // Accumulate packet chunks before final 'results' message arrives
-  const packetBufRef = useRef<Record<PolicyType, PacketRecord[]>>({ fifo: [], spq: [], wfq: [] });
-
-  // Live per-policy counters
   const [liveCounters, setLiveCounters] = useState<Record<PolicyType, { admitted: number; dropped: number }>>({
     fifo: { admitted: 0, dropped: 0 },
     spq:  { admitted: 0, dropped: 0 },
     wfq:  { admitted: 0, dropped: 0 },
+    drr:  { admitted: 0, dropped: 0 },
   });
+  const [liveEvents, setLiveEvents]     = useState<LiveEvent[]>([]);
 
-  // Rolling event log — last 40 notable packet events
-  const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([]);
-  const eventIdRef = useRef(0);
+  const wsRef        = useRef<WebSocket | null>(null);
+  const packetBufRef = useRef<Record<PolicyType, PacketRecord[]>>({ fifo: [], spq: [], wfq: [], drr: [] });
+  const eventIdRef   = useRef(0);
 
   const run = useCallback((config: SimConfig) => {
     if (wsRef.current) wsRef.current.close();
-    packetBufRef.current = { fifo: [], spq: [], wfq: [] };
+    packetBufRef.current = { fifo: [], spq: [], wfq: [], drr: [] };
     setStatus('connecting');
     setError(null);
     setResults(null);
-    setSnapshots({ fifo: [], spq: [], wfq: [] });
-    setProgress({ fifo: 0, spq: 0, wfq: 0 });
-    setLiveCounters({ fifo: { admitted: 0, dropped: 0 }, spq: { admitted: 0, dropped: 0 }, wfq: { admitted: 0, dropped: 0 } });
+    setSnapshots({ fifo: [], spq: [], wfq: [], drr: [] });
+    setProgress({ fifo: 0, spq: 0, wfq: 0, drr: 0 });
+    setLiveCounters({
+      fifo: { admitted: 0, dropped: 0 },
+      spq:  { admitted: 0, dropped: 0 },
+      wfq:  { admitted: 0, dropped: 0 },
+      drr:  { admitted: 0, dropped: 0 },
+    });
     setLiveEvents([]);
     eventIdRef.current = 0;
 
@@ -69,6 +70,7 @@ export function useSimulation() {
           const policy = msg.policy as PolicyType;
           if (policy === 'spq') setStatus('running_spq');
           if (policy === 'wfq') setStatus('running_wfq');
+          if (policy === 'drr') setStatus('running_drr');
           setProgress((prev) => ({ ...prev, [policy]: msg.progress ?? 0 }));
           setSnapshots((prev) => {
             const next = [...prev[policy], {
@@ -119,6 +121,7 @@ export function useSimulation() {
         case 'policy_complete':
           if (msg.policy === 'fifo') setStatus('running_spq');
           if (msg.policy === 'spq')  setStatus('running_wfq');
+          if (msg.policy === 'wfq')  setStatus('running_drr');
           break;
 
         case 'packets_chunk': {
@@ -135,12 +138,14 @@ export function useSimulation() {
             fifo:         msg.fifo,
             spq:          msg.spq,
             wfq:          msg.wfq,
+            drr:          msg.drr,
             packets_fifo: packetBufRef.current.fifo,
             packets_spq:  packetBufRef.current.spq,
             packets_wfq:  packetBufRef.current.wfq,
+            packets_drr:  packetBufRef.current.drr,
           });
           setStatus('complete');
-          setProgress({ fifo: 100, spq: 100, wfq: 100 });
+          setProgress({ fifo: 100, spq: 100, wfq: 100, drr: 100 });
           break;
 
         case 'error':
@@ -160,13 +165,18 @@ export function useSimulation() {
 
   const reset = useCallback(() => {
     if (wsRef.current) wsRef.current.close();
-    packetBufRef.current = { fifo: [], spq: [], wfq: [] };
+    packetBufRef.current = { fifo: [], spq: [], wfq: [], drr: [] };
     setStatus('idle');
     setResults(null);
     setError(null);
-    setSnapshots({ fifo: [], spq: [], wfq: [] });
-    setProgress({ fifo: 0, spq: 0, wfq: 0 });
-    setLiveCounters({ fifo: { admitted: 0, dropped: 0 }, spq: { admitted: 0, dropped: 0 }, wfq: { admitted: 0, dropped: 0 } });
+    setSnapshots({ fifo: [], spq: [], wfq: [], drr: [] });
+    setProgress({ fifo: 0, spq: 0, wfq: 0, drr: 0 });
+    setLiveCounters({
+      fifo: { admitted: 0, dropped: 0 },
+      spq:  { admitted: 0, dropped: 0 },
+      wfq:  { admitted: 0, dropped: 0 },
+      drr:  { admitted: 0, dropped: 0 },
+    });
     setLiveEvents([]);
   }, []);
 

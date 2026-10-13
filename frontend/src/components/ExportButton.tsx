@@ -18,7 +18,7 @@ export function ExportButton({ results }: { results: SimResults | null }) {
       'Delay Variation ms', 'Throughput Mbps'];
     const rows: string[][] = [headers];
     for (const cls of classes) {
-      for (const pol of ['fifo', 'spq', 'wfq'] as const) {
+      for (const pol of ['fifo', 'spq', 'wfq', 'drr'] as const) {
         const m = results[pol].per_class[cls];
         rows.push([cls, pol.toUpperCase(), String(m.generated), String(m.delivered),
           String(m.dropped), m.drop_rate_pct.toFixed(2), m.delivery_ratio_pct.toFixed(2),

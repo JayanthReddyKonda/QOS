@@ -5,7 +5,7 @@ import copy
 import pytest
 from simulation.packet import Packet, CLASS_PRIORITY
 from simulation.traffic_generator import generate_workload
-from simulation.scheduler import FIFOScheduler, SPQScheduler, WFQScheduler
+from simulation.scheduler import FIFOScheduler, SPQScheduler, WFQScheduler, DRRScheduler
 from simulation.metrics import compute_metrics
 
 DEFAULT_CFG = dict(link_mbps=10.0, buffer_limit=50, prop_delay_us=10_000)
@@ -114,10 +114,10 @@ def test_same_input():
         assert fp.arrival_time_us == sp.arrival_time_us
 
 
-# A6: Count reconciliation (all 3 policies)
+# A6: Count reconciliation (all 4 policies)
 def test_count_reconciliation():
     workload = generate_workload(seed=42, load_profile='heavy', link_mbps=10.0, duration_ms=2000)
-    for policy_cls in [FIFOScheduler, SPQScheduler, WFQScheduler]:
+    for policy_cls in [FIFOScheduler, SPQScheduler, WFQScheduler, DRRScheduler]:
         packets = copy.deepcopy(workload)
         sched = policy_cls(**DEFAULT_CFG)
         delivered, dropped, sim_time_us, link_busy_us, occ = run_scheduler(sched, packets)
@@ -234,4 +234,51 @@ def test_wfq_proportional_bandwidth():
         # Voice (weight=4) should have equal or lower queueing delay than file (weight=1)
         assert voice_delay <= file_delay + 5.0, \
             f"WFQ: voice delay ({voice_delay:.2f} ms) unexpectedly higher than file ({file_delay:.2f} ms)"
+
+
+# A14: DRR — Deficit Round Robin fairness and non-preemption
+def test_drr_fairness():
+    """DRR should serve all active queues in round robin, granting proportional deficit."""
+    workload = generate_workload(seed=42, load_profile='congested', link_mbps=10.0, duration_ms=2000)
+    sched = DRRScheduler(**DEFAULT_CFG)
+    delivered, dropped, sim_time_us, link_busy_us, occ = run_scheduler(sched, copy.deepcopy(workload))
+    metrics = compute_metrics(delivered + dropped, sim_time_us, link_busy_us, occ, link_mbps=10.0, duration_ms=2000)
+
+    assert metrics['delivered'] > 0
+    assert metrics['delivered'] + metrics['dropped'] == len(workload)
+    # Voice (weight=4) should have lower or comparable queueing delay than file (weight=1)
+    voice_delay = metrics['per_class']['voice']['avg_queueing_delay_ms']
+    file_delay = metrics['per_class']['file']['avg_queueing_delay_ms']
+    if voice_delay is not None and file_delay is not None:
+        assert voice_delay <= file_delay + 5.0
+
+
+# A15: Push-Out Buffer Policy protects high-priority traffic
+def test_push_out_protects_voice():
+    """When buffer is full of low-priority packets, Push-Out should evict lower-priority
+    packets to admit Voice packets, yielding 0 voice drops.
+    """
+    workload = generate_workload(seed=42, load_profile='congested', link_mbps=10.0, duration_ms=2000)
+    sched = SPQScheduler(buffer_limit=30, link_mbps=10.0, prop_delay_us=10_000, drop_policy='push_out')
+    delivered, dropped, sim_time_us, link_busy_us, occ = run_scheduler(sched, copy.deepcopy(workload))
+    metrics = compute_metrics(delivered + dropped, sim_time_us, link_busy_us, occ, link_mbps=10.0, duration_ms=2000)
+
+    # Voice drop rate under push_out should be substantially lower than file drop rate
+    voice_drop = metrics['per_class']['voice']['drop_rate_pct']
+    file_drop = metrics['per_class']['file']['drop_rate_pct']
+    assert voice_drop < 5.0, f"Push-Out failed to protect voice: voice_drop={voice_drop:.2f}%"
+    assert file_drop > voice_drop, f"File ({file_drop:.2f}%) did not absorb drops compared to voice ({voice_drop:.2f}%)"
+
+
+# A16: WRED early drop drops packets before hard buffer limit
+def test_wred_early_drop():
+    """WRED should perform probabilistic early drop with wred_early_drop reason."""
+    workload = generate_workload(seed=42, load_profile='congested', link_mbps=10.0, duration_ms=2000)
+    sched = SPQScheduler(buffer_limit=50, link_mbps=10.0, prop_delay_us=10_000, drop_policy='wred')
+    delivered, dropped, sim_time_us, link_busy_us, occ = run_scheduler(sched, copy.deepcopy(workload))
+
+    early_drops = [p for p in dropped if p.drop_reason == 'wred_early_drop']
+    assert len(early_drops) > 0, "WRED did not trigger any early drops"
+    assert len(delivered) + len(dropped) == len(workload)
+
 

@@ -1,5 +1,5 @@
-import type { SimConfig, SimStatus } from '../types/simulation';
-import { LOAD_PROFILE_LABELS } from '../types/simulation';
+import type { SimConfig, SimStatus, DropPolicy } from '../types/simulation';
+import { LOAD_PROFILE_LABELS, DROP_POLICY_LABELS, DROP_POLICY_DESCRIPTIONS } from '../types/simulation';
 
 interface Props {
   config: SimConfig;
@@ -11,7 +11,7 @@ interface Props {
 
 export function ControlPanel({ config, onChange, onRun, onReset, status }: Props) {
   const running = status === 'connecting' || status === 'running_fifo'
-               || status === 'running_spq' || status === 'running_wfq';
+               || status === 'running_spq' || status === 'running_wfq' || status === 'running_drr';
   const set = <K extends keyof SimConfig>(key: K, value: SimConfig[K]) =>
     onChange({ ...config, [key]: value });
 
@@ -33,6 +33,25 @@ export function ControlPanel({ config, onChange, onRun, onReset, status }: Props
         >
           Reset
         </button>
+      </div>
+
+      <hr className="border-gray-200" />
+
+      {/* Buffer Drop Policy (High-value feature!) */}
+      <div className="space-y-2">
+        <p className="section-title">Buffer Drop Management</p>
+        <select
+          value={config.drop_policy}
+          onChange={(e) => set('drop_policy', e.target.value as DropPolicy)}
+          className="w-full border border-gray-300 rounded-lg px-2.5 py-2 text-xs font-semibold text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          {Object.entries(DROP_POLICY_LABELS).map(([k, v]) => (
+            <option key={k} value={k}>{v}</option>
+          ))}
+        </select>
+        <div className="text-[11px] text-gray-500 bg-gray-50 border border-gray-200 rounded p-2 leading-relaxed">
+          {DROP_POLICY_DESCRIPTIONS[config.drop_policy]}
+        </div>
       </div>
 
       <hr className="border-gray-200" />
@@ -103,10 +122,10 @@ export function ControlPanel({ config, onChange, onRun, onReset, status }: Props
         <p className="section-title">Traffic Classes</p>
         <div className="space-y-2">
           {[
-            { cls: 'Voice',  color: 'bg-green-500',  label: 'Priority 4 · 160 B fixed',   weight: 'WFQ w=4' },
-            { cls: 'Video',  color: 'bg-blue-500',   label: 'Priority 3 · 400–1400 B',    weight: 'WFQ w=3' },
-            { cls: 'Web',    color: 'bg-amber-500',  label: 'Priority 2 · 200–1500 B',    weight: 'WFQ w=2' },
-            { cls: 'File',   color: 'bg-gray-400',   label: 'Priority 1 · 1000–1500 B',   weight: 'WFQ w=1' },
+            { cls: 'Voice',  color: 'bg-green-500',  label: 'Priority 4 · 160 B fixed',   weight: 'w=4 · Q=2000B' },
+            { cls: 'Video',  color: 'bg-blue-500',   label: 'Priority 3 · 400–1400 B',    weight: 'w=3 · Q=1500B' },
+            { cls: 'Web',    color: 'bg-amber-500',  label: 'Priority 2 · 200–1500 B',    weight: 'w=2 · Q=1000B' },
+            { cls: 'File',   color: 'bg-gray-400',   label: 'Priority 1 · 1000–1500 B',   weight: 'w=1 · Q=500B' },
           ].map(({ cls, color, label, weight }) => (
             <div key={cls} className="flex items-center justify-between text-xs">
               <div className="flex items-center gap-1.5">
@@ -115,7 +134,7 @@ export function ControlPanel({ config, onChange, onRun, onReset, status }: Props
               </div>
               <div className="text-right">
                 <div className="text-gray-500">{label}</div>
-                <div className="text-teal-600 font-mono font-semibold">{weight}</div>
+                <div className="text-teal-600 font-mono text-[11px] font-semibold">{weight}</div>
               </div>
             </div>
           ))}
@@ -126,27 +145,26 @@ export function ControlPanel({ config, onChange, onRun, onReset, status }: Props
 
       {/* Scheduler legend */}
       <div>
-        <p className="section-title">Schedulers</p>
+        <p className="section-title">Schedulers (Quartet)</p>
         <div className="space-y-1.5 text-xs">
           <div className="flex items-center gap-2">
             <span className="w-3 h-3 rounded-sm bg-blue-500 flex-shrink-0" />
-            <span className="text-gray-700"><strong>FIFO</strong> — arrival order, no priority</span>
+            <span className="text-gray-700"><strong>FIFO</strong> — arrival order</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="w-3 h-3 rounded-sm bg-violet-500 flex-shrink-0" />
-            <span className="text-gray-700"><strong>SPQ</strong> — absolute priority, non-preemptive</span>
+            <span className="text-gray-700"><strong>SPQ</strong> — absolute priority</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="w-3 h-3 rounded-sm bg-teal-500 flex-shrink-0" />
-            <span className="text-gray-700"><strong>WFQ</strong> — virtual finish time, proportional BW</span>
+            <span className="text-gray-700"><strong>WFQ</strong> — virtual finish time (PGPS)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-3 h-3 rounded-sm bg-rose-500 flex-shrink-0" />
+            <span className="text-gray-700"><strong>DRR</strong> — deficit round robin O(1)</span>
           </div>
         </div>
       </div>
-
-      <p className="text-[10px] text-gray-400 leading-relaxed pt-1">
-        ⚠ Shared tail-drop buffer: a high-priority class can still be dropped if lower-priority
-        packets already fill the buffer before it arrives.
-      </p>
     </div>
   );
 }

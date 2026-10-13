@@ -3,7 +3,7 @@ import {
   Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
 import type { SimResults, TrafficClass, PolicyType, QueueSnapshot } from '../../types/simulation';
-import { CLASS_COLORS, CLASS_LABELS, POLICY_COLORS } from '../../types/simulation';
+import { POLICY_COLORS } from '../../types/simulation';
 
 const CLASSES: TrafficClass[] = ['voice', 'video', 'web', 'file'];
 
@@ -17,6 +17,7 @@ export function ChartsTab({ results }: {
     FIFO: +(results.fifo.per_class[cls].avg_e2e_delay_ms ?? 0).toFixed(2),
     SPQ:  +(results.spq.per_class[cls].avg_e2e_delay_ms  ?? 0).toFixed(2),
     WFQ:  +(results.wfq.per_class[cls].avg_e2e_delay_ms  ?? 0).toFixed(2),
+    DRR:  +(results.drr.per_class[cls].avg_e2e_delay_ms  ?? 0).toFixed(2),
   }));
 
   // ── Per-class drop rate comparison ──────────────────────────────────────────
@@ -25,6 +26,7 @@ export function ChartsTab({ results }: {
     FIFO: +results.fifo.per_class[cls].drop_rate_pct.toFixed(2),
     SPQ:  +results.spq.per_class[cls].drop_rate_pct.toFixed(2),
     WFQ:  +results.wfq.per_class[cls].drop_rate_pct.toFixed(2),
+    DRR:  +results.drr.per_class[cls].drop_rate_pct.toFixed(2),
   }));
 
   // ── Throughput per class ──────────────────────────────────────────────────
@@ -33,6 +35,7 @@ export function ChartsTab({ results }: {
     FIFO: +results.fifo.per_class[cls].throughput_mbps.toFixed(3),
     SPQ:  +results.spq.per_class[cls].throughput_mbps.toFixed(3),
     WFQ:  +results.wfq.per_class[cls].throughput_mbps.toFixed(3),
+    DRR:  +results.drr.per_class[cls].throughput_mbps.toFixed(3),
   }));
 
   // ── Queue occupancy over time ─────────────────────────────────────────────
@@ -45,13 +48,16 @@ export function ChartsTab({ results }: {
   const occWfq  = (results.wfq.occupancy_series ?? []).map((p) => ({
     t: p.time_ms, WFQ: p.occupancy,
   }));
+  const occDrr  = (results.drr.occupancy_series ?? []).map((p) => ({
+    t: p.time_ms, DRR: p.occupancy,
+  }));
 
-  // merge occupancy series by index (same length, same t scale)
   const occData = occFifo.map((f, i) => ({
     t:    f.t,
     FIFO: f.FIFO,
     SPQ:  occSpq[i]?.SPQ  ?? 0,
     WFQ:  occWfq[i]?.WFQ  ?? 0,
+    DRR:  occDrr[i]?.DRR  ?? 0,
   }));
 
   const tooltipStyle = { fontSize: 11, borderRadius: 8, border: '1px solid #e5e7eb' };
@@ -60,14 +66,14 @@ export function ChartsTab({ results }: {
     <div className="space-y-6 max-w-6xl">
       <div className="pb-2 border-b border-gray-200">
         <h2 className="text-xl font-black text-gray-900">Performance Charts</h2>
-        <p className="text-xs text-gray-500 mt-1">All charts use the same workload replayed under FIFO, SPQ, and WFQ.</p>
+        <p className="text-xs text-gray-500 mt-1">Direct visual comparison across all 4 schedulers (FIFO, SPQ, WFQ, DRR).</p>
       </div>
 
       {/* Row 1: Delay + Drop rate */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <ChartCard title="Avg E2E Delay per Class" subtitle="Lower is better for real-time traffic">
+        <ChartCard title="Avg E2E Delay per Class" subtitle="Lower is better for interactive voice and video">
           <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={delayData} barCategoryGap="30%">
+            <BarChart data={delayData} barCategoryGap="25%">
               <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
               <XAxis dataKey="name" tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} unit=" ms" />
@@ -76,13 +82,14 @@ export function ChartsTab({ results }: {
               <Bar dataKey="FIFO" fill={POLICY_COLORS.fifo} radius={[3,3,0,0]} />
               <Bar dataKey="SPQ"  fill={POLICY_COLORS.spq}  radius={[3,3,0,0]} />
               <Bar dataKey="WFQ"  fill={POLICY_COLORS.wfq}  radius={[3,3,0,0]} />
+              <Bar dataKey="DRR"  fill={POLICY_COLORS.drr}  radius={[3,3,0,0]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Packet Drop Rate per Class" subtitle="Lower is better; file transfers absorb drops">
+        <ChartCard title="Packet Drop Rate per Class" subtitle="Under Push-Out, Voice drops 0%; under Tail-Drop, drops are class-blind">
           <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={dropData} barCategoryGap="30%">
+            <BarChart data={dropData} barCategoryGap="25%">
               <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
               <XAxis dataKey="name" tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} unit=" %" />
@@ -91,6 +98,7 @@ export function ChartsTab({ results }: {
               <Bar dataKey="FIFO" fill={POLICY_COLORS.fifo} radius={[3,3,0,0]} />
               <Bar dataKey="SPQ"  fill={POLICY_COLORS.spq}  radius={[3,3,0,0]} />
               <Bar dataKey="WFQ"  fill={POLICY_COLORS.wfq}  radius={[3,3,0,0]} />
+              <Bar dataKey="DRR"  fill={POLICY_COLORS.drr}  radius={[3,3,0,0]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -98,9 +106,9 @@ export function ChartsTab({ results }: {
 
       {/* Row 2: Throughput + Queue occupancy */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <ChartCard title="Throughput per Class" subtitle="How much bandwidth each class gets">
+        <ChartCard title="Throughput per Class" subtitle="Proportional bandwidth distribution">
           <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={tputData} barCategoryGap="30%">
+            <BarChart data={tputData} barCategoryGap="25%">
               <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
               <XAxis dataKey="name" tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} unit=" Mbps" />
@@ -109,11 +117,12 @@ export function ChartsTab({ results }: {
               <Bar dataKey="FIFO" fill={POLICY_COLORS.fifo} radius={[3,3,0,0]} />
               <Bar dataKey="SPQ"  fill={POLICY_COLORS.spq}  radius={[3,3,0,0]} />
               <Bar dataKey="WFQ"  fill={POLICY_COLORS.wfq}  radius={[3,3,0,0]} />
+              <Bar dataKey="DRR"  fill={POLICY_COLORS.drr}  radius={[3,3,0,0]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Queue Occupancy Over Time" subtitle="Buffer depth (pkts) — shared buffer">
+        <ChartCard title="Queue Occupancy Over Time" subtitle="Buffer depth dynamics across all 4 schedulers">
           <ResponsiveContainer width="100%" height={260}>
             <LineChart data={occData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
@@ -124,35 +133,21 @@ export function ChartsTab({ results }: {
               <Line type="monotone" dataKey="FIFO" stroke={POLICY_COLORS.fifo} dot={false} strokeWidth={1.5} />
               <Line type="monotone" dataKey="SPQ"  stroke={POLICY_COLORS.spq}  dot={false} strokeWidth={1.5} />
               <Line type="monotone" dataKey="WFQ"  stroke={POLICY_COLORS.wfq}  dot={false} strokeWidth={1.5} />
+              <Line type="monotone" dataKey="DRR"  stroke={POLICY_COLORS.drr}  dot={false} strokeWidth={1.5} />
             </LineChart>
           </ResponsiveContainer>
         </ChartCard>
-      </div>
-
-      {/* Class colour legend */}
-      <div className="card p-4">
-        <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Traffic Class Colour Reference</p>
-        <div className="flex flex-wrap gap-4">
-          {CLASSES.map((cls) => (
-            <div key={cls} className="flex items-center gap-2 text-xs">
-              <span className="w-3 h-3 rounded-sm" style={{ background: CLASS_COLORS[cls] }} />
-              <span className="text-gray-700 font-medium">{CLASS_LABELS[cls]}</span>
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   );
 }
 
-function ChartCard({ title, subtitle, children }: {
-  title: string; subtitle: string; children: React.ReactNode;
-}) {
+function ChartCard({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
   return (
     <div className="card p-5">
-      <div className="mb-3">
+      <div className="mb-4">
         <h3 className="text-sm font-bold text-gray-800">{title}</h3>
-        <p className="text-[11px] text-gray-400">{subtitle}</p>
+        <p className="text-xs text-gray-400 mt-0.5">{subtitle}</p>
       </div>
       {children}
     </div>

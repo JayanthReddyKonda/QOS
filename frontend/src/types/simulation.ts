@@ -1,11 +1,14 @@
 export type TrafficClass = 'voice' | 'video' | 'web' | 'file';
-export type PolicyType = 'fifo' | 'spq' | 'wfq';
+export type PolicyType = 'fifo' | 'spq' | 'wfq' | 'drr';
+export type DropPolicy = 'tail_drop' | 'push_out' | 'wred';
+
 export type SimStatus =
   | 'idle'
   | 'connecting'
   | 'running_fifo'
   | 'running_spq'
   | 'running_wfq'
+  | 'running_drr'
   | 'complete'
   | 'error';
 
@@ -16,6 +19,7 @@ export interface SimConfig {
   buffer_limit: number;
   prop_delay_ms: number;
   duration_ms: number;
+  drop_policy: DropPolicy;
 }
 
 export interface PacketRecord {
@@ -73,9 +77,11 @@ export interface SimResults {
   fifo: SimMetrics;
   spq: SimMetrics;
   wfq: SimMetrics;
+  drr: SimMetrics;
   packets_fifo: PacketRecord[];
   packets_spq: PacketRecord[];
   packets_wfq: PacketRecord[];
+  packets_drr: PacketRecord[];
 }
 
 export interface QueueSnapshot {
@@ -114,7 +120,7 @@ export const CLASS_PRIORITY: Record<TrafficClass, number> = {
   file:  1,
 };
 
-// WFQ default weights (voice=4, video=3, web=2, file=1)
+// Default weights (voice=4, video=3, web=2, file=1)
 export const WFQ_WEIGHTS: Record<TrafficClass, number> = {
   voice: 4,
   video: 3,
@@ -122,16 +128,25 @@ export const WFQ_WEIGHTS: Record<TrafficClass, number> = {
   file:  1,
 };
 
+export const DRR_QUANTUMS: Record<TrafficClass, number> = {
+  voice: 2000,
+  video: 1500,
+  web:   1000,
+  file:  500,
+};
+
 export const POLICY_COLORS: Record<PolicyType, string> = {
   fifo: '#2563eb',  // blue-600
   spq:  '#7c3aed',  // violet-600
   wfq:  '#0d9488',  // teal-600
+  drr:  '#e11d48',  // rose-600
 };
 
 export const POLICY_LABELS: Record<PolicyType, string> = {
   fifo: 'FIFO (Baseline)',
   spq:  'Strict Priority (SPQ)',
   wfq:  'Weighted Fair Queuing (WFQ)',
+  drr:  'Deficit Round Robin (DRR)',
 };
 
 export const LOAD_PROFILE_LABELS: Record<string, string> = {
@@ -144,7 +159,7 @@ export const LOAD_PROFILE_LABELS: Record<string, string> = {
 export const LOAD_PROFILE_DETAILS: Record<string, { label: string; desc: string; color: string }> = {
   low: {
     label: 'Low Load (~50%)',
-    desc: 'Plenty of headroom. Queues idle; all three schedulers behave identically.',
+    desc: 'Plenty of headroom. Queues idle; all schedulers behave identically.',
     color: 'text-green-700 bg-green-50 border-green-200',
   },
   near_capacity: {
@@ -154,12 +169,24 @@ export const LOAD_PROFILE_DETAILS: Record<string, { label: string; desc: string;
   },
   congested: {
     label: 'Congested (~130%)',
-    desc: 'Demand exceeds capacity. SPQ / WFQ protect real-time classes at cost of file delay.',
+    desc: 'Demand exceeds capacity. QoS schedulers protect real-time latency.',
     color: 'text-amber-700 bg-amber-50 border-amber-200',
   },
   heavy: {
     label: 'Heavy Congestion (~170%)',
-    desc: 'Severe bottleneck. Buffer overflows, tail-drops dominate, file transfer suffers high loss.',
+    desc: 'Severe bottleneck. Buffer overflows, tail-drops dominate unless Push-Out or WRED is active.',
     color: 'text-red-700 bg-red-50 border-red-200',
   },
+};
+
+export const DROP_POLICY_LABELS: Record<DropPolicy, string> = {
+  tail_drop: 'Tail-Drop (Standard Shared Buffer)',
+  push_out:  'Push-Out (Priority Eviction)',
+  wred:      'WRED (Weighted Early Detection)',
+};
+
+export const DROP_POLICY_DESCRIPTIONS: Record<DropPolicy, string> = {
+  tail_drop: 'Class-blind: drops incoming packets whenever buffer reaches limit. All classes experience similar drop rates (~28–30%).',
+  push_out:  'Priority eviction: when buffer is full and Voice arrives, waiting File packets are pushed out. Voice drop rate drops to 0.0%.',
+  wred:      'Probabilistic early discard: sheds bulk file traffic before buffer saturates, preventing bufferbloat and protecting real-time voice.',
 };

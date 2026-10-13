@@ -4,7 +4,7 @@ from typing import List, Dict, Any
 from fastapi import WebSocket
 from .packet import Packet
 from .traffic_generator import generate_workload
-from .scheduler import FIFOScheduler, SPQScheduler, WFQScheduler
+from .scheduler import FIFOScheduler, SPQScheduler, WFQScheduler, DRRScheduler
 from .metrics import compute_metrics
 
 TICK_US = 100            # 100 µs tick resolution
@@ -13,13 +13,14 @@ PACKET_CHUNK_SIZE = 500  # Packet records streamed in batches to avoid oversized
 
 
 async def run_simulation(config: dict, websocket: WebSocket):
-    """Run FIFO, SPQ then WFQ on the same workload, streaming events over WebSocket."""
+    """Run FIFO, SPQ, WFQ, and DRR on the same workload with chosen drop_policy, streaming events over WebSocket."""
     seed          = int(config['seed'])
     load_profile  = str(config['load_profile'])
     link_mbps     = float(config['link_mbps'])
     buffer_limit  = int(config['buffer_limit'])
     prop_delay_ms = float(config['prop_delay_ms'])
     duration_ms   = int(config['duration_ms'])
+    drop_policy   = str(config.get('drop_policy', 'tail_drop'))
 
     prop_delay_us = int(prop_delay_ms * 1000)
 
@@ -33,16 +34,19 @@ async def run_simulation(config: dict, websocket: WebSocket):
     results: Dict[str, Any] = {}
     all_packets: Dict[str, List[dict]] = {}
 
-    for policy in ['fifo', 'spq', 'wfq']:
+    policies = ['fifo', 'spq', 'wfq', 'drr']
+
+    for policy in policies:
         packets: List[Packet] = copy.deepcopy(workload)
 
         if policy == 'fifo':
-            scheduler = FIFOScheduler(buffer_limit, link_mbps, prop_delay_us)
+            scheduler = FIFOScheduler(buffer_limit, link_mbps, prop_delay_us, drop_policy=drop_policy)
         elif policy == 'spq':
-            scheduler = SPQScheduler(buffer_limit, link_mbps, prop_delay_us)
+            scheduler = SPQScheduler(buffer_limit, link_mbps, prop_delay_us, drop_policy=drop_policy)
+        elif policy == 'wfq':
+            scheduler = WFQScheduler(buffer_limit, link_mbps, prop_delay_us, drop_policy=drop_policy)
         else:
-            scheduler = WFQScheduler(buffer_limit, link_mbps, prop_delay_us)
-
+            scheduler = DRRScheduler(buffer_limit, link_mbps, prop_delay_us, drop_policy=drop_policy)
 
         arrival_idx    = 0
         sim_time_us    = 0
@@ -126,7 +130,7 @@ async def run_simulation(config: dict, websocket: WebSocket):
         })
 
     # ── Stream packet trace in chunks (avoids oversized WS frames) ───────
-    for policy in ['fifo', 'spq', 'wfq']:
+    for policy in policies:
         pkt_list = all_packets[policy]
         for i in range(0, max(1, len(pkt_list)), PACKET_CHUNK_SIZE):
             chunk = pkt_list[i : i + PACKET_CHUNK_SIZE]
@@ -145,5 +149,5 @@ async def run_simulation(config: dict, websocket: WebSocket):
         'fifo': results.get('fifo', {}),
         'spq':  results.get('spq',  {}),
         'wfq':  results.get('wfq',  {}),
+        'drr':  results.get('drr',  {}),
     })
-

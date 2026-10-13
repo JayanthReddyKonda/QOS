@@ -110,6 +110,52 @@ def select_next(now_us):
         <p className="mt-1"><strong>Standard reference:</strong> Demers, Keshav, Shenker — "Analysis and Simulation of a Fair Queuing Algorithm", SIGCOMM 1989.</p>
       </Section>
 
+      <Section title="DRR — Deficit Round Robin (Shreedhar & Varghese, 1996)">
+        <p>
+          Deficit Round Robin achieves fair bandwidth allocation in <strong>O(1) amortized time</strong> per packet,
+          avoiding WFQ's sorting overhead. Each class has a <em>Quantum</em> (e.g., 2000B for Voice, 500B for File)
+          and maintains a <em>Deficit Counter</em>.
+        </p>
+        <CodeBlock>{`# DRR: Deficit counter round robin per class
+quantum = {voice: 2000, video: 1500, web: 1000, file: 500} # bytes
+deficit = {cls: 0 for cls in classes}
+
+def select_next():
+    for cls in active_classes_in_rr_order:
+        deficit[cls] += quantum[cls]
+        while queues[cls] and queues[cls][0].payload_bytes <= deficit[cls]:
+            pkt = queues[cls].popleft()
+            deficit[cls] -= pkt.payload_bytes
+            return pkt
+        if not queues[cls]:
+            deficit[cls] = 0  # reset when queue empty`}</CodeBlock>
+        <p className="mt-2">
+          <strong>Why DRR matters:</strong> Widely deployed in high-speed hardware routers (Cisco Catalyst, Juniper)
+          where sorting virtual finish times at 100+ Gbps is infeasible.
+        </p>
+        <p className="mt-1"><strong>Standard reference:</strong> M. Shreedhar and G. Varghese — "Efficient Fair Queueing Using Deficit Round-Robin", IEEE/ACM Transactions on Networking, 1996.</p>
+      </Section>
+
+      <Section title="Buffer Drop Management: Tail-Drop vs. Push-Out vs. WRED">
+        <p>
+          While schedulers dictate transmission order, buffer policies dictate <em>who is dropped</em> when buffer memory fills up:
+        </p>
+        <div className="space-y-3 mt-3">
+          <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg">
+            <span className="font-bold text-gray-900">1. Tail-Drop (Standard):</span>
+            <p className="text-gray-600 mt-0.5">Class-blind. Drops incoming packets when buffer occupancy hits <code>buffer_limit</code>. Under Poisson congestion, all classes suffer roughly equal loss (~28–30%).</p>
+          </div>
+          <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+            <span className="font-bold text-blue-900">2. Push-Out (Priority Eviction):</span>
+            <p className="text-blue-800 mt-0.5">When the buffer is full and a high-priority packet (Voice) arrives, the switch evicts the lowest-priority packet (File) currently in the queue. <strong>Result: Voice drops drop to 0.0%</strong>, proving true loss protection!</p>
+          </div>
+          <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg">
+            <span className="font-bold text-purple-900">3. WRED (Weighted Random Early Detection):</span>
+            <p className="text-purple-800 mt-0.5">Calculates exponentially weighted moving average queue length: <code>avg_q = (1 - wq)*avg_q + wq*q</code>. Drops bulk file traffic probabilistically before the buffer saturates, preventing bufferbloat and protecting real-time interactive traffic.</p>
+          </div>
+        </div>
+      </Section>
+
       <Section title="Simulation Architecture">
         <CodeBlock>{`WebSocket flow:
   client → {seed, load_profile, link_mbps, buffer_limit, ...}

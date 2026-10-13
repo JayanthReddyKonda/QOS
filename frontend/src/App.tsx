@@ -9,6 +9,7 @@ import { QueueTab } from './components/tabs/QueueTab';
 import { PacketTraceTab } from './components/tabs/PacketTraceTab';
 import { ArchitectureGuide } from './components/ArchitectureGuide';
 import type { SimConfig, PolicyType, QueueSnapshot } from './types/simulation';
+import { DROP_POLICY_LABELS } from './types/simulation';
 
 // ─── defaults ────────────────────────────────────────────────────────────────
 const DEFAULT_CONFIG: SimConfig = {
@@ -18,6 +19,7 @@ const DEFAULT_CONFIG: SimConfig = {
   buffer_limit: 50,
   prop_delay_ms: 10,
   duration_ms: 5000,
+  drop_policy: 'tail_drop',
 };
 
 const TABS = [
@@ -37,6 +39,7 @@ const STATUS_META: Record<string, { label: string; dot: string }> = {
   running_fifo: { label: 'Running FIFO…',  dot: 'bg-blue-500 animate-ping' },
   running_spq:  { label: 'Running SPQ…',   dot: 'bg-violet-500 animate-ping' },
   running_wfq:  { label: 'Running WFQ…',   dot: 'bg-teal-500 animate-ping' },
+  running_drr:  { label: 'Running DRR…',   dot: 'bg-rose-500 animate-ping' },
   complete:     { label: 'Complete',        dot: 'bg-green-500' },
   error:        { label: 'Error',           dot: 'bg-red-500' },
 };
@@ -47,7 +50,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('overview');
   const sim = useSimulation();
 
-  const isRunning = ['connecting', 'running_fifo', 'running_spq', 'running_wfq'].includes(sim.status);
+  const isRunning = ['connecting', 'running_fifo', 'running_spq', 'running_wfq', 'running_drr'].includes(sim.status);
   const meta = STATUS_META[sim.status] ?? STATUS_META.idle;
 
   return (
@@ -60,7 +63,7 @@ export default function App() {
           <div className="leading-none">
             <span className="text-sm font-bold text-gray-900 tracking-tight">QoS Traffic Manager</span>
             <span className="hidden sm:inline text-gray-400 text-xs ml-2">
-              FIFO · SPQ · WFQ · {config.link_mbps} Mbps link
+              FIFO · SPQ · WFQ · DRR · {DROP_POLICY_LABELS[config.drop_policy]} · {config.link_mbps} Mbps
             </span>
           </div>
         </div>
@@ -70,10 +73,10 @@ export default function App() {
           {/* Live progress — only shown while running */}
           {isRunning && (
             <div className="flex items-center gap-3 text-[11px] font-mono text-gray-500 bg-gray-50 border border-gray-200 px-3 py-1.5 rounded-md">
-              {(['fifo', 'spq', 'wfq'] as PolicyType[]).map((p) => (
+              {(['fifo', 'spq', 'wfq', 'drr'] as PolicyType[]).map((p) => (
                 <span key={p} className="flex items-center gap-1">
                   <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                    p === 'fifo' ? 'bg-blue-500' : p === 'spq' ? 'bg-violet-500' : 'bg-teal-500'
+                    p === 'fifo' ? 'bg-blue-500' : p === 'spq' ? 'bg-violet-500' : p === 'wfq' ? 'bg-teal-500' : 'bg-rose-500'
                   }`} />
                   {p.toUpperCase()} {sim.progress[p].toFixed(0)}%
                 </span>
@@ -171,11 +174,12 @@ function EmptyState({ onRun, onGuide, config }: {
       <div className="space-y-2 max-w-lg">
         <h2 className="text-xl font-bold text-gray-900">Select parameters and run the simulation</h2>
         <p className="text-gray-500 text-sm leading-relaxed">
-          The same synthetic Poisson workload is replayed identically through{' '}
+          The same synthetic Poisson workload is replayed identically through all 4 schedulers:{' '}
           <strong className="text-gray-700">FIFO</strong>,{' '}
-          <strong className="text-gray-700">SPQ</strong>, and{' '}
-          <strong className="text-gray-700">WFQ</strong> — giving a direct, controlled comparison
-          on a {config.link_mbps} Mbps congested link.
+          <strong className="text-gray-700">SPQ</strong>,{' '}
+          <strong className="text-gray-700">WFQ</strong>, and{' '}
+          <strong className="text-gray-700">DRR</strong> with{' '}
+          <span className="text-blue-700 font-semibold">{DROP_POLICY_LABELS[config.drop_policy]}</span> on a {config.link_mbps} Mbps bottleneck.
         </p>
       </div>
 
@@ -195,18 +199,19 @@ function EmptyState({ onRun, onGuide, config }: {
         </button>
       </div>
 
-      {/* Algorithm reference table */}
-      <div className="w-full max-w-2xl border border-gray-200 rounded-xl overflow-hidden bg-white text-left">
-        <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50">
-          <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Scheduler Reference</span>
+      {/* Scheduler reference table */}
+      <div className="w-full max-w-3xl border border-gray-200 rounded-xl overflow-hidden bg-white text-left">
+        <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
+          <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Scheduler Reference (Quartet)</span>
+          <span className="text-[11px] font-mono text-gray-400">Buffer mode: {config.drop_policy}</span>
         </div>
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-gray-100">
               <th className="px-4 py-2 font-semibold text-gray-500 text-left">Algorithm</th>
               <th className="px-4 py-2 font-semibold text-gray-500 text-left">Selection Policy</th>
-              <th className="px-4 py-2 font-semibold text-gray-500 text-left">Guarantee</th>
-              <th className="px-4 py-2 font-semibold text-gray-500 text-left">Trade-off</th>
+              <th className="px-4 py-2 font-semibold text-gray-500 text-left">Complexity</th>
+              <th className="px-4 py-2 font-semibold text-gray-500 text-left">Guarantee / Trade-off</th>
             </tr>
           </thead>
           <tbody>
@@ -215,22 +220,29 @@ function EmptyState({ onRun, onGuide, config }: {
                 color: 'bg-blue-500',
                 name: 'FIFO (Baseline)',
                 policy: 'Arrival order',
-                guarantee: 'Fair average service',
-                tradeoff: 'Voice/video blocked by bulk transfers',
+                complexity: 'O(1)',
+                guarantee: 'Simplest; voice blocked behind bulk transfers',
               },
               {
                 color: 'bg-violet-500',
                 name: 'SPQ — Strict Priority',
                 policy: 'Highest-priority non-empty queue',
-                guarantee: 'Voice always served first',
-                tradeoff: 'Low-priority classes can starve',
+                complexity: 'O(P)',
+                guarantee: 'Voice served first; bulk traffic may starve',
               },
               {
                 color: 'bg-teal-500',
                 name: 'WFQ — Weighted Fair',
                 policy: 'Min virtual-finish-time (w: 4/3/2/1)',
-                guarantee: 'Proportional bandwidth per weight',
-                tradeoff: 'Higher complexity; no absolute priority',
+                complexity: 'O(log N)',
+                guarantee: 'Proportional bandwidth; high computational cost',
+              },
+              {
+                color: 'bg-rose-500',
+                name: 'DRR — Deficit Round Robin',
+                policy: 'Round-robin with Deficit Counters',
+                complexity: 'O(1) amortized',
+                guarantee: 'Hardware-friendly fair queueing with quantum',
               },
             ].map((r) => (
               <tr key={r.name} className="border-t border-gray-100">
@@ -241,8 +253,8 @@ function EmptyState({ onRun, onGuide, config }: {
                   </div>
                 </td>
                 <td className="px-4 py-2.5 text-gray-600">{r.policy}</td>
+                <td className="px-4 py-2.5 font-mono text-gray-500">{r.complexity}</td>
                 <td className="px-4 py-2.5 text-gray-600">{r.guarantee}</td>
-                <td className="px-4 py-2.5 text-gray-500">{r.tradeoff}</td>
               </tr>
             ))}
           </tbody>
@@ -267,6 +279,7 @@ const POLICY_STYLE: Record<string, { label: string; short: string; dot: string; 
   fifo: { label: 'FIFO (Baseline)',              short: 'FIFO', dot: 'bg-blue-500',   bar: 'bg-blue-500',   text: 'text-blue-700',   ring: 'ring-blue-300'   },
   spq:  { label: 'Strict Priority (SPQ)',        short: 'SPQ',  dot: 'bg-violet-500', bar: 'bg-violet-500', text: 'text-violet-700', ring: 'ring-violet-300' },
   wfq:  { label: 'Weighted Fair Queuing (WFQ)',  short: 'WFQ',  dot: 'bg-teal-500',   bar: 'bg-teal-500',   text: 'text-teal-700',   ring: 'ring-teal-300'   },
+  drr:  { label: 'Deficit Round Robin (DRR)',    short: 'DRR',  dot: 'bg-rose-500',   bar: 'bg-rose-500',   text: 'text-rose-700',   ring: 'ring-rose-300'   },
 };
 
 const EVENT_STYLE: Record<string, { label: string; color: string }> = {
@@ -293,24 +306,20 @@ function RunningState({
   config: SimConfig;
 }) {
   const currentPolicy: PolicyType =
-    status === 'running_wfq' ? 'wfq' : status === 'running_spq' ? 'spq' : 'fifo';
+    status === 'running_drr' ? 'drr' :
+    status === 'running_wfq' ? 'wfq' :
+    status === 'running_spq' ? 'spq' : 'fifo';
 
   const latestSnap =
     snapshots[currentPolicy][snapshots[currentPolicy].length - 1] ?? null;
 
-  const policies: PolicyType[] = ['fifo', 'spq', 'wfq'];
+  const policies: PolicyType[] = ['fifo', 'spq', 'wfq', 'drr'];
   const phaseIdx = policies.indexOf(currentPolicy);
 
-  // Queue bar max — cap at buffer_limit or 50 for visual scaling
   const maxQ = Math.max(config.buffer_limit, 10);
 
-  // Infer total enqueued = admitted across all completed + current policy
-  const totalAdmitted = (['fifo', 'spq', 'wfq'] as PolicyType[]).reduce(
-    (s, p) => s + liveCounters[p].admitted, 0,
-  );
-  const totalDropped = (['fifo', 'spq', 'wfq'] as PolicyType[]).reduce(
-    (s, p) => s + liveCounters[p].dropped, 0,
-  );
+  const totalAdmitted = policies.reduce((s, p) => s + liveCounters[p].admitted, 0);
+  const totalDropped  = policies.reduce((s, p) => s + liveCounters[p].dropped,  0);
 
   return (
     <div className="h-full overflow-y-auto">
@@ -318,9 +327,14 @@ function RunningState({
 
         {/* ── Phase stepper ──────────────────────────────────────────────── */}
         <div className="bg-white border border-gray-200 rounded-xl p-4">
-          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">
-            Simulation Pipeline
-          </p>
+          <div className="flex justify-between items-center mb-3">
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+              Simulation Pipeline — 4 Schedulers
+            </p>
+            <span className="text-[10px] font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+              Buffer Drop: {DROP_POLICY_LABELS[config.drop_policy]}
+            </span>
+          </div>
           <div className="flex items-center gap-0">
             {policies.map((p, i) => {
               const ps   = POLICY_STYLE[p];
@@ -331,7 +345,6 @@ function RunningState({
                   <div className={`flex-1 flex flex-col items-center gap-1.5 px-3 py-2.5 rounded-lg transition-all ${
                     curr ? `bg-gray-50 ring-2 ${ps.ring}` : ''
                   }`}>
-                    {/* Dot */}
                     <span className={`w-3 h-3 rounded-full border-2 flex-shrink-0 ${
                       done ? 'bg-gray-400 border-gray-400' :
                       curr ? `${ps.dot} border-transparent` :
@@ -346,8 +359,8 @@ function RunningState({
                       {done ? '100%' : `${progress[p].toFixed(0)}%`}
                     </span>
                   </div>
-                  {i < 2 && (
-                    <div className={`h-px w-6 flex-shrink-0 ${i < phaseIdx ? 'bg-gray-400' : 'bg-gray-200'}`} />
+                  {i < policies.length - 1 && (
+                    <div className={`h-px w-5 flex-shrink-0 ${i < phaseIdx ? 'bg-gray-400' : 'bg-gray-200'}`} />
                   )}
                 </div>
               );
@@ -448,7 +461,7 @@ function RunningState({
                           {cnt.admitted === 0 && 'pending'}
                         </span>
                       </div>
-                      <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
                         <div
                           className={`h-full rounded-full transition-all duration-200 ${ps.bar}`}
                           style={{ width: `${pct}%` }}
@@ -467,8 +480,8 @@ function RunningState({
               </p>
               <div className="grid grid-cols-3 gap-3">
                 <Stat label="Generated" value={totalPackets.toLocaleString()} sub="workload" color="text-gray-800" />
-                <Stat label="Enqueued"  value={totalAdmitted.toLocaleString()} sub="all policies" color="text-blue-700" />
-                <Stat label="Dropped"   value={totalDropped.toLocaleString()}  sub="tail-drop"   color="text-red-600"  />
+                <Stat label="Enqueued"  value={totalAdmitted.toLocaleString()} sub="all 4 policies" color="text-blue-700" />
+                <Stat label="Dropped"   value={totalDropped.toLocaleString()}  sub={config.drop_policy}   color="text-red-600"  />
               </div>
             </div>
           </div>
@@ -524,7 +537,6 @@ function RunningState({
   );
 }
 
-// ── tiny helper ───────────────────────────────────────────────────────────────
 function Stat({ label, value, sub, color }: { label: string; value: string; sub: string; color: string }) {
   return (
     <div className="text-center">

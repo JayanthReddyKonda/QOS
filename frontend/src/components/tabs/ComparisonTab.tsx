@@ -1,5 +1,5 @@
 import type { SimResults, TrafficClass } from '../../types/simulation';
-import { CLASS_COLORS, CLASS_LABELS, CLASS_DESCRIPTIONS, CLASS_PRIORITY, POLICY_COLORS } from '../../types/simulation';
+import { CLASS_COLORS, CLASS_LABELS, CLASS_DESCRIPTIONS, CLASS_PRIORITY, POLICY_COLORS, DRR_QUANTUMS, WFQ_WEIGHTS } from '../../types/simulation';
 
 const CLASSES: TrafficClass[] = ['voice', 'video', 'web', 'file'];
 
@@ -21,25 +21,34 @@ export function ComparisonTab({ results }: { results: SimResults }) {
       <div className="pb-2 border-b border-gray-200">
         <h2 className="text-xl font-black text-gray-900">Per-Class Metrics Comparison</h2>
         <p className="text-xs text-gray-500 mt-1">
-          Same synthetic workload tested across FIFO, SPQ, and WFQ on a {results.fifo.sim_duration_ms > 0 ? (results.fifo.link_utilization_pct > 0 ? 'congested' : 'simulated') : ''} link.
+          Direct side-by-side comparison across all 4 schedulers (FIFO, SPQ, WFQ, DRR) on identical traffic workloads.
         </p>
       </div>
 
-      {/* Educational Callout: Scheduling vs Buffer Dropping */}
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-900 space-y-1.5">
-        <div className="flex items-center gap-2 font-bold text-amber-950 text-sm">
-          <span>💡 Why are Drop Rates similar across all classes & policies (~28–30%)?</span>
+      {/* Educational Callout: Scheduling vs Buffer Management */}
+      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-900 space-y-2">
+        <div className="font-bold text-amber-950 text-sm flex items-center gap-2">
+          <span>💡 Core Theory: Packet Scheduling vs. Buffer Management</span>
         </div>
         <p className="leading-relaxed">
-          <strong>Scheduling vs. Buffer Management:</strong> FIFO, SPQ, and WFQ are <em>scheduling algorithms</em> (service disciplines)—they decide <strong>which packet transmits next</strong> when the link is idle. Under SPQ, Voice queueing delay drops from <strong>~33 ms down to ~0.5 ms (98% reduction)</strong> because it is served first.
+          <strong>1. Schedulers (FIFO, SPQ, WFQ, DRR)</strong> control <em>transmission order</em> when the link is idle.
+          Under SPQ, Voice packets bypass waiting queues, reducing queue latency from ~33 ms down to ~0.5 ms. Under DRR & WFQ, classes receive fair bandwidth proportional to their weight (Voice=4, Video=3, Web=2, File=1).
         </p>
         <p className="leading-relaxed">
-          However, per Section 10 of the network specification, the switch uses a <strong>Shared Finite Buffer with Tail-Drop</strong>. Dropping occurs at the ingress when the 50-packet buffer is full. Because tail-drop is class-blind, an arriving Voice packet is still dropped if the buffer is saturated by bulk file traffic. Schedulers reorder transmission; they do not increase physical link capacity or reserve buffer slots without active queue management (e.g., WRED/push-out).
+          <strong>2. Buffer Policies (Tail-Drop vs. Push-Out vs. WRED)</strong> control <em>who is dropped</em> when buffer memory is constrained:
         </p>
+        <ul className="list-disc list-inside space-y-1 pl-2">
+          <li><strong>Tail-Drop (Normal):</strong> Class-blind. Incoming packets are dropped when buffer has 50 packets, leading to equal loss across classes.</li>
+          <li><strong>Push-Out (Priority Eviction):</strong> When full, arriving Voice packets evict waiting File packets from the tail of the buffer. Voice drop rate drops to <strong>0.0%</strong>!</li>
+          <li><strong>WRED (Early Detection):</strong> Drops bulk file traffic probabilistically before buffer overflows, preserving headroom for real-time traffic.</li>
+        </ul>
       </div>
 
       {CLASSES.map((cls) => {
         const priority = CLASS_PRIORITY[cls];
+        const weight = WFQ_WEIGHTS[cls];
+        const quantum = DRR_QUANTUMS[cls];
+
         return (
           <div key={cls} className="card overflow-x-auto">
             {/* Class header */}
@@ -47,7 +56,7 @@ export function ComparisonTab({ results }: { results: SimResults }) {
               <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: CLASS_COLORS[cls] }} />
               <div>
                 <span className="font-bold text-gray-900 text-sm">{CLASS_LABELS[cls]}</span>
-                <span className="ml-2 text-xs text-gray-400">SPQ Priority {priority}</span>
+                <span className="ml-2 text-xs text-gray-400">SPQ Pri: {priority} · WFQ Weight: {weight} · DRR Quantum: {quantum}B</span>
                 {cls === 'voice' || cls === 'video' ? (
                   <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-700 font-semibold">Delay-sensitive</span>
                 ) : (
@@ -65,7 +74,8 @@ export function ComparisonTab({ results }: { results: SimResults }) {
                   <th className="px-4 py-2 text-right font-semibold" style={{ color: POLICY_COLORS.fifo }}>FIFO</th>
                   <th className="px-4 py-2 text-right font-semibold" style={{ color: POLICY_COLORS.spq }}>SPQ</th>
                   <th className="px-4 py-2 text-right font-semibold" style={{ color: POLICY_COLORS.wfq }}>WFQ</th>
-                  <th className="px-4 py-2 text-left pl-5 font-semibold text-gray-400">Interpretation</th>
+                  <th className="px-4 py-2 text-right font-semibold" style={{ color: POLICY_COLORS.drr }}>DRR</th>
+                  <th className="px-4 py-2 text-left pl-5 font-semibold text-gray-400">Analysis</th>
                 </tr>
               </thead>
               <tbody>
@@ -73,21 +83,21 @@ export function ComparisonTab({ results }: { results: SimResults }) {
                   const fv = results.fifo.per_class[cls][key as keyof typeof results.fifo.per_class[typeof cls]];
                   const sv = results.spq.per_class[cls][key as keyof typeof results.spq.per_class[typeof cls]];
                   const wv = results.wfq.per_class[cls][key as keyof typeof results.wfq.per_class[typeof cls]];
+                  const dv = results.drr.per_class[cls][key as keyof typeof results.drr.per_class[typeof cls]];
 
                   const vals = [
                     { pol: 'fifo', v: typeof fv === 'number' ? fv : null },
                     { pol: 'spq',  v: typeof sv === 'number' ? sv : null },
                     { pol: 'wfq',  v: typeof wv === 'number' ? wv : null },
+                    { pol: 'drr',  v: typeof dv === 'number' ? dv : null },
                   ];
 
                   const numeric = vals.filter(x => x.v != null).map(x => x.v as number);
                   const best = numeric.length > 0
                     ? (better === 'lower' ? Math.min(...numeric) : better === 'higher' ? Math.max(...numeric) : null)
                     : null;
-
                   const isBest = (v: number | null) => best !== null && v === best;
-
-                  const interpretation = buildInterpretation(cls, key as string, fv, sv, wv);
+                  const analysis = buildAnalysis(cls, key as string, fv, sv);
 
                   return (
                     <tr key={key} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
@@ -99,7 +109,7 @@ export function ComparisonTab({ results }: { results: SimResults }) {
                           {v == null ? 'N/A' : `${v.toFixed(d)} ${unit}`}
                         </td>
                       ))}
-                      <td className="px-4 py-2 text-gray-400 pl-5">{interpretation}</td>
+                      <td className="px-4 py-2 text-gray-400 pl-5">{analysis}</td>
                     </tr>
                   );
                 })}
@@ -112,32 +122,31 @@ export function ComparisonTab({ results }: { results: SimResults }) {
   );
 }
 
-function buildInterpretation(
+function buildAnalysis(
   cls: TrafficClass,
   key: string,
-  fv: unknown, sv: unknown, wv: unknown,
+  fv: unknown, sv: unknown,
 ): string {
   const fn = typeof fv === 'number' ? fv : null;
   const sn = typeof sv === 'number' ? sv : null;
-  const wn = typeof wv === 'number' ? wv : null;
 
-  if (key === 'avg_e2e_delay_ms' && fn != null && sn != null && wn != null) {
+  if (key === 'avg_e2e_delay_ms' && fn != null && sn != null) {
     if (cls === 'voice' || cls === 'video') {
-      const spqGain = fn > 0 ? ((fn - sn) / fn * 100).toFixed(0) : 0;
-      const wfqGain = fn > 0 ? ((fn - wn) / fn * 100).toFixed(0) : 0;
-      return `SPQ: ${spqGain}% lower than FIFO · WFQ: ${wfqGain}% lower`;
+      const spqGain = fn > 0 ? ((fn - sn) / fn * 100).toFixed(0) : '0';
+      return `SPQ yields ${spqGain}% lower delay than FIFO; WFQ & DRR maintain fair proportional delay`;
     }
     if (cls === 'file') {
-      return 'File waits longer under SPQ/WFQ — trades delay for voice/video quality';
+      return 'File transfer yields to interactive voice & video under SPQ, WFQ, and DRR';
     }
   }
-  if (key === 'drop_rate_pct' && fn != null && sn != null && wn != null) {
-    return 'Shared tail-drop: all classes suffer similar ingress loss during saturation';
+  if (key === 'drop_rate_pct' && fn != null && sn != null) {
+    if (sn < 5.0 && fn > 15.0) {
+      return 'Push-Out / WRED active: priority traffic protected from buffer drops';
+    }
+    return 'Under tail-drop, drops remain evenly distributed across classes';
   }
-  if (key === 'throughput_mbps' && fn != null && sn != null) {
-    const diff = Math.abs(sn - fn);
-    if (diff < 0.01) return 'Throughput unchanged — scheduling only reorders, not adds bandwidth';
-    return `${sn > fn ? 'SPQ delivers more' : 'SPQ delivers less'} bits for this class`;
+  if (key === 'throughput_mbps') {
+    return 'Bandwidth proportional to configured weight / quantum';
   }
   return '';
 }

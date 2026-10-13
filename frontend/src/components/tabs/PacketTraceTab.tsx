@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { SimResults, PolicyType, TrafficClass, PacketRecord } from '../../types/simulation';
 import { CLASS_COLORS, CLASS_LABELS, POLICY_COLORS } from '../../types/simulation';
 
-const POLICIES: PolicyType[] = ['fifo', 'spq', 'wfq'];
+const POLICIES: PolicyType[] = ['fifo', 'spq', 'wfq', 'drr'];
 const PAGE_SIZE = 50;
 
 function downloadCsv(filename: string, rows: string[][]): void {
