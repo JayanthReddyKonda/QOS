@@ -54,12 +54,16 @@ export function OverviewTab({ results, config }: { results: SimResults; config: 
       </div>
 
       {/* Key insight banner */}
-      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-gray-700 leading-relaxed">
-        <span className="font-bold text-blue-800">Key Finding: </span>
-        Under <em>{loadInfo.label}</em>, SPQ reduced Voice E2E latency by <strong className="text-violet-700">{spqSaving}%</strong>
-        {' '}({fmt(voiceDelays.fifo, 'ms')} → {fmt(voiceDelays.spq, 'ms')}). WFQ reduced it by <strong className="text-teal-700">{wfqSaving}%</strong>
-        {' '}({fmt(voiceDelays.wfq, 'ms')}). Total throughput remained nearly identical across all three policies — QoS
-        reorders priorities without requiring extra bandwidth.
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-gray-700 leading-relaxed space-y-1">
+        <div>
+          <span className="font-bold text-blue-800">Key Finding: </span>
+          Under <em>{loadInfo.label}</em>, SPQ reduced Voice queueing latency by <strong className="text-violet-700">{spqSaving}%</strong>
+          {' '}({fmt(voiceDelays.fifo, 'ms')} → {fmt(voiceDelays.spq, 'ms')}). WFQ reduced it by <strong className="text-teal-700">{wfqSaving}%</strong>
+          {' '}({fmt(voiceDelays.wfq, 'ms')}).
+        </div>
+        <div className="text-xs text-gray-600">
+          <strong>Why are drop rates similar?</strong> Schedulers only reorder transmission when packets leave the queue. Under a shared tail-drop buffer, physical link capacity is fixed, so all three policies drop the same overflow volume (~{fmt(f.drop_rate_pct, '%')}) regardless of class priority.
+        </div>
       </div>
 
       {/* Top metric cards */}
