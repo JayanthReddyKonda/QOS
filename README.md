@@ -16,15 +16,15 @@ An advanced discrete-time Computer Networks simulation comparing the classic aca
 - **Academic Scheduler Quartet:**
   - **FIFO (First-In, First-Out):** Baseline arrival order queueing.
   - **SPQ (Strict Priority Queuing):** Non-preemptive priority queueing protecting real-time voice.
-  - **WFQ (Weighted Fair Queuing):** Minimum Virtual Finish Time ($VFT$) tracking based on Demers et al. (PGPS).
-  - **DRR (Deficit Round Robin):** Hardware-efficient $O(1)$ fair queueing based on Shreedhar & Varghese (1996).
+  - **WFQ (Weighted Fair Queuing):** Minimum Virtual Finish Time (VFT) tracking based on Demers et al. (PGPS).
+  - **DRR (Deficit Round Robin):** Hardware-efficient O(1) fair queueing based on Shreedhar & Varghese (1996).
 - **Buffer Drop Management:**
   - **Tail-Drop (Normal):** Classic class-blind buffer saturation drop.
   - **Push-Out (Priority Eviction):** Low-priority bulk packets evicted when buffer is full, reducing voice loss to **0.0%**.
   - **WRED (Weighted Random Early Detection):** EWMA queue tracking with probabilistic early drops to prevent bufferbloat.
 - **Dynamic Bandwidth & Latency Analytics:**
   - Dynamic 100 ms time-binned Bandwidth Allocation Timeline (Stacked Area Chart) with bottleneck link capacity reference line.
-  - Synchronized Queue Occupancy time series with binary search interpolation.
+  - Synchronized Queue Occupancy time series with binary search step-function interpolation.
   - Offered Load vs. Delivered Throughput side-by-side comparison per class.
   - Per-packet trace log with pagination, status filters, and CSV export.
 - **Clean Academic UI:** High-contrast, clean light palette, zero cheesy emoji icons, mathematically accurate typography.
@@ -33,12 +33,12 @@ An advanced discrete-time Computer Networks simulation comparing the classic aca
 
 ## Traffic Classes & Parameters
 
-| Class | Traffic Type | Priority | WFQ Weight | DRR Quantum | Packet Size | Poisson Mean | Real-World Analog |
+| Class | Traffic Type | Priority | WFQ Weight | DRR Quantum | Packet Size | Mean Interval | Real-World Analog |
 |---|---|:---:|:---:|:---:|:---:|:---:|---|
-| **Voice** | Real-Time Audio | 4 (Highest) | $w = 4$ | 2,000 B | 160 B (Fixed) | 20.0 ms | VoIP (G.711), Discord |
-| **Video** | Streaming Video | 3 (High) | $w = 3$ | 1,500 B | 400–1,400 B | 8.0 ms | Zoom, WebRTC stream |
-| **Web** | Transactional | 2 (Medium) | $w = 2$ | 1,000 B | 200–1,500 B | 15.0 ms | HTTP/2 API responses |
-| **File** | Bulk Transfer | 1 (Lowest) | $w = 1$ | 500 B | 1,000–1,500 B | 5.0 ms | FTP, cloud backups |
+| **Voice** | Real-Time Audio | 4 (Highest) | `w = 4` | 2,000 B | 160 B (Fixed) | 20.0 ms | VoIP (G.711), Discord |
+| **Video** | Streaming Video | 3 (High) | `w = 3` | 1,500 B | 400–1,400 B | 8.0 ms | Zoom, WebRTC stream |
+| **Web** | Transactional | 2 (Medium) | `w = 2` | 1,000 B | 200–1,500 B | 15.0 ms | HTTP/2 API responses |
+| **File** | Bulk Transfer | 1 (Lowest) | `w = 1` | 500 B | 1,000–1,500 B | 5.0 ms | FTP, cloud backups |
 
 ---
 
@@ -134,8 +134,8 @@ QOS/
 | **A3** | SPQ non-preemption: in-service packet is never interrupted |
 | **A4** | Buffer tail-drop strictly enforced at capacity limit |
 | **A5** | Workload reproducibility across seeds |
-| **A6** | Conservation law: $\text{generated} = \text{delivered} + \text{dropped}$ |
-| **A7** | Metric boundaries: utilization $\le 100\%$, drop rate $\le 100\%$, positive delays |
+| **A6** | Conservation law: `generated = delivered + dropped` across all policies |
+| **A7** | Metric boundaries: utilization <= 100%, drop rate <= 100%, positive delays |
 | **A8** | Byte-identical reproducibility on repeated seed executions |
 | **A9** | Dashboard reconciliation: sum of class metrics matches aggregates |
 | **A10** | SPQ priority trade-off: Voice delay < FIFO Voice delay under congestion |
