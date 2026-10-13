@@ -157,30 +157,7 @@ Tick loop (100 µs resolution):
         </div>
       </Section>
 
-      <Section title="Acceptance Tests (Pytest — 13 tests)">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-          {[
-            'A1 — FIFO serves packets in arrival order',
-            'A2 — SPQ serves voice before video before web before file',
-            'A3 — SPQ non-preemption: in-service packet not interrupted',
-            'A4 — Buffer tail-drop enforced at limit',
-            'A5 — Same seed → same workload (reproducibility)',
-            'A6 — generated = delivered + dropped (all 3 policies)',
-            'A7 — All metric values in valid ranges',
-            'A8 — Repeated runs with same seed produce identical results',
-            'A9 — Per-class sums equal aggregate metrics',
-            'A10 — SPQ voice delay < FIFO voice delay under congestion',
-            'A11 — WFQ buffer limit enforced',
-            'A12 — WFQ non-preemption: in-service packet not interrupted',
-            'A13 — WFQ fair bandwidth: voice lower delay than file',
-          ].map((t) => (
-            <div key={t} className="flex items-start gap-2">
-              <span className="text-green-600 font-bold mt-0.5">✓</span>
-              <span className="text-gray-600">{t}</span>
-            </div>
-          ))}
-        </div>
-      </Section>
+
     </div>
   );
 }

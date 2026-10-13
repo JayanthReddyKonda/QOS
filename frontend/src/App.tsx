@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useSimulation } from './hooks/useSimulation';
+import type { LiveEvent } from './hooks/useSimulation';
 import { ControlPanel } from './components/ControlPanel';
 import { OverviewTab } from './components/tabs/OverviewTab';
 import { ComparisonTab } from './components/tabs/ComparisonTab';
@@ -7,7 +8,7 @@ import { ChartsTab } from './components/tabs/ChartsTab';
 import { QueueTab } from './components/tabs/QueueTab';
 import { PacketTraceTab } from './components/tabs/PacketTraceTab';
 import { ArchitectureGuide } from './components/ArchitectureGuide';
-import type { SimConfig, PolicyType } from './types/simulation';
+import type { SimConfig, PolicyType, QueueSnapshot } from './types/simulation';
 
 // ─── defaults ────────────────────────────────────────────────────────────────
 const DEFAULT_CONFIG: SimConfig = {
@@ -37,7 +38,7 @@ const STATUS_META: Record<string, { label: string; dot: string }> = {
   running_spq:  { label: 'Running SPQ…',   dot: 'bg-violet-500 animate-ping' },
   running_wfq:  { label: 'Running WFQ…',   dot: 'bg-teal-500 animate-ping' },
   complete:     { label: 'Complete',        dot: 'bg-green-500' },
-  error:        { label: 'Error',          dot: 'bg-red-500' },
+  error:        { label: 'Error',           dot: 'bg-red-500' },
 };
 
 // ─── App ─────────────────────────────────────────────────────────────────────
@@ -56,10 +57,6 @@ export default function App() {
       <header className="bg-white border-b border-gray-200 px-5 py-0 flex items-center justify-between flex-shrink-0" style={{ height: '52px' }}>
         {/* Brand */}
         <div className="flex items-center gap-3">
-          {/* Text-mark logo — no icon library, no generic clip-art */}
-          <div className="flex items-center justify-center w-8 h-8 rounded bg-blue-600 select-none">
-            <span className="text-white font-black text-sm font-mono leading-none tracking-tighter">QS</span>
-          </div>
           <div className="leading-none">
             <span className="text-sm font-bold text-gray-900 tracking-tight">QoS Traffic Manager</span>
             <span className="hidden sm:inline text-gray-400 text-xs ml-2">
@@ -138,7 +135,15 @@ export default function App() {
             ) : sim.status === 'idle' ? (
               <EmptyState onRun={() => sim.run(config)} onGuide={() => setActiveTab('guide')} config={config} />
             ) : isRunning ? (
-              <RunningState status={sim.status} progress={sim.progress} totalPackets={sim.totalPackets} snapshots={sim.snapshots} />
+              <RunningState
+                status={sim.status}
+                progress={sim.progress}
+                totalPackets={sim.totalPackets}
+                snapshots={sim.snapshots}
+                liveCounters={sim.liveCounters}
+                liveEvents={sim.liveEvents}
+                config={config}
+              />
             ) : sim.status === 'complete' && sim.results ? (
               <div className="p-5">
                 {activeTab === 'overview'   && <OverviewTab   results={sim.results} config={config} />}
@@ -190,7 +195,7 @@ function EmptyState({ onRun, onGuide, config }: {
         </button>
       </div>
 
-      {/* Algorithm reference table — cleaner than coloured cards */}
+      {/* Algorithm reference table */}
       <div className="w-full max-w-2xl border border-gray-200 rounded-xl overflow-hidden bg-white text-left">
         <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50">
           <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Scheduler Reference</span>
@@ -248,84 +253,284 @@ function EmptyState({ onRun, onGuide, config }: {
 }
 
 // ─── Running state ────────────────────────────────────────────────────────────
+
+const CLASSES = ['voice', 'video', 'web', 'file'] as const;
+
+const CLS_STYLE: Record<string, { label: string; dot: string; bar: string; text: string; bg: string; border: string }> = {
+  voice: { label: 'Voice',         dot: 'bg-green-500',  bar: 'bg-green-500',  text: 'text-green-700',  bg: 'bg-green-50',  border: 'border-green-200' },
+  video: { label: 'Video',         dot: 'bg-blue-500',   bar: 'bg-blue-500',   text: 'text-blue-700',   bg: 'bg-blue-50',   border: 'border-blue-200'  },
+  web:   { label: 'Web',           dot: 'bg-amber-500',  bar: 'bg-amber-500',  text: 'text-amber-700',  bg: 'bg-amber-50',  border: 'border-amber-200' },
+  file:  { label: 'File Transfer', dot: 'bg-gray-400',   bar: 'bg-gray-400',   text: 'text-gray-600',   bg: 'bg-gray-50',   border: 'border-gray-200'  },
+};
+
+const POLICY_STYLE: Record<string, { label: string; short: string; dot: string; bar: string; text: string; ring: string }> = {
+  fifo: { label: 'FIFO (Baseline)',              short: 'FIFO', dot: 'bg-blue-500',   bar: 'bg-blue-500',   text: 'text-blue-700',   ring: 'ring-blue-300'   },
+  spq:  { label: 'Strict Priority (SPQ)',        short: 'SPQ',  dot: 'bg-violet-500', bar: 'bg-violet-500', text: 'text-violet-700', ring: 'ring-violet-300' },
+  wfq:  { label: 'Weighted Fair Queuing (WFQ)',  short: 'WFQ',  dot: 'bg-teal-500',   bar: 'bg-teal-500',   text: 'text-teal-700',   ring: 'ring-teal-300'   },
+};
+
+const EVENT_STYLE: Record<string, { label: string; color: string }> = {
+  admitted:  { label: 'ENQ',  color: 'text-blue-600' },
+  dropped:   { label: 'DROP', color: 'text-red-600'  },
+  delivered: { label: 'DEL',  color: 'text-green-600'},
+};
+
 function RunningState({
   status,
   progress,
   totalPackets,
   snapshots,
+  liveCounters,
+  liveEvents,
+  config,
 }: {
   status: string;
   progress: Record<PolicyType, number>;
   totalPackets: number;
-  snapshots: Record<PolicyType, { queue_lengths: Record<string, number> }[]>;
+  snapshots: Record<PolicyType, QueueSnapshot[]>;
+  liveCounters: Record<PolicyType, { admitted: number; dropped: number }>;
+  liveEvents: LiveEvent[];
+  config: SimConfig;
 }) {
-  const currentPolicy = status === 'running_wfq' ? 'wfq' : status === 'running_spq' ? 'spq' : 'fifo';
-  const latest = snapshots[currentPolicy as PolicyType];
-  const latestSnap = latest[latest.length - 1] ?? null;
+  const currentPolicy: PolicyType =
+    status === 'running_wfq' ? 'wfq' : status === 'running_spq' ? 'spq' : 'fifo';
 
-  const policies: { key: PolicyType; label: string; bar: string }[] = [
-    { key: 'fifo', label: 'FIFO', bar: 'bg-blue-500' },
-    { key: 'spq',  label: 'SPQ',  bar: 'bg-violet-500' },
-    { key: 'wfq',  label: 'WFQ',  bar: 'bg-teal-500' },
-  ];
+  const latestSnap =
+    snapshots[currentPolicy][snapshots[currentPolicy].length - 1] ?? null;
+
+  const policies: PolicyType[] = ['fifo', 'spq', 'wfq'];
+  const phaseIdx = policies.indexOf(currentPolicy);
+
+  // Queue bar max — cap at buffer_limit or 50 for visual scaling
+  const maxQ = Math.max(config.buffer_limit, 10);
+
+  // Infer total enqueued = admitted across all completed + current policy
+  const totalAdmitted = (['fifo', 'spq', 'wfq'] as PolicyType[]).reduce(
+    (s, p) => s + liveCounters[p].admitted, 0,
+  );
+  const totalDropped = (['fifo', 'spq', 'wfq'] as PolicyType[]).reduce(
+    (s, p) => s + liveCounters[p].dropped, 0,
+  );
 
   return (
-    <div className="flex flex-col items-center justify-center h-full py-10 px-6 gap-7">
+    <div className="h-full overflow-y-auto">
+      <div className="p-5 space-y-4 max-w-5xl mx-auto">
 
-      {/* Phase label */}
-      <div className="text-center space-y-1">
-        <h3 className="text-lg font-bold text-gray-900">
-          Simulating {currentPolicy.toUpperCase()}
-        </h3>
-        <p className="text-gray-400 text-xs font-mono">
-          {totalPackets.toLocaleString()} packets · {['fifo','spq','wfq'].indexOf(currentPolicy) + 1} of 3 phases
-        </p>
-      </div>
-
-      {/* Progress */}
-      <div className="w-full max-w-md card p-5 space-y-4">
-        {policies.map(({ key, label, bar }) => (
-          <div key={key}>
-            <div className="flex justify-between text-xs mb-1.5">
-              <span className="font-semibold text-gray-600">{label}</span>
-              <span className="font-mono text-gray-700">{progress[key].toFixed(0)}%</span>
-            </div>
-            <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all duration-200 ${bar}`}
-                style={{ width: `${progress[key]}%` }}
-              />
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Live queue counts */}
-      {latestSnap && (
-        <div className="w-full max-w-md card p-4">
-          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-3">
-            Live queue depth — {currentPolicy.toUpperCase()}
+        {/* ── Phase stepper ──────────────────────────────────────────────── */}
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">
+            Simulation Pipeline
           </p>
-          <div className="grid grid-cols-4 gap-2">
-            {(['voice', 'video', 'web', 'file'] as const).map((cls) => {
-              const colorMap = {
-                voice: 'border-green-200 text-green-700 bg-green-50',
-                video: 'border-blue-200 text-blue-700 bg-blue-50',
-                web:   'border-amber-200 text-amber-700 bg-amber-50',
-                file:  'border-gray-200 text-gray-600 bg-gray-50',
-              };
+          <div className="flex items-center gap-0">
+            {policies.map((p, i) => {
+              const ps   = POLICY_STYLE[p];
+              const done = i < phaseIdx;
+              const curr = i === phaseIdx;
               return (
-                <div key={cls} className={`rounded-lg p-2.5 border text-center ${colorMap[cls]}`}>
-                  <div className="text-lg font-black font-mono">
-                    {latestSnap.queue_lengths?.[cls] ?? 0}
+                <div key={p} className="flex items-center flex-1">
+                  <div className={`flex-1 flex flex-col items-center gap-1.5 px-3 py-2.5 rounded-lg transition-all ${
+                    curr ? `bg-gray-50 ring-2 ${ps.ring}` : ''
+                  }`}>
+                    {/* Dot */}
+                    <span className={`w-3 h-3 rounded-full border-2 flex-shrink-0 ${
+                      done ? 'bg-gray-400 border-gray-400' :
+                      curr ? `${ps.dot} border-transparent` :
+                             'bg-white border-gray-300'
+                    }`} />
+                    <span className={`text-xs font-bold ${
+                      done ? 'text-gray-400' : curr ? ps.text : 'text-gray-300'
+                    }`}>{ps.short}</span>
+                    <span className={`text-[10px] font-mono ${
+                      curr ? 'text-gray-700 font-semibold' : 'text-gray-400'
+                    }`}>
+                      {done ? '100%' : `${progress[p].toFixed(0)}%`}
+                    </span>
                   </div>
-                  <div className="text-[10px] capitalize font-semibold mt-0.5">{cls}</div>
+                  {i < 2 && (
+                    <div className={`h-px w-6 flex-shrink-0 ${i < phaseIdx ? 'bg-gray-400' : 'bg-gray-200'}`} />
+                  )}
                 </div>
               );
             })}
           </div>
         </div>
-      )}
+
+        {/* ── Main two-column area ───────────────────────────────────────── */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+          {/* Left: queue depth bars */}
+          <div className="bg-white border border-gray-200 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                Live Queue Depth — {POLICY_STYLE[currentPolicy].short}
+              </p>
+              <span className="text-[10px] font-mono text-gray-400">
+                buffer limit: {config.buffer_limit} pkts
+              </span>
+            </div>
+
+            {latestSnap ? (
+              <div className="space-y-3">
+                {CLASSES.map((cls) => {
+                  const depth = latestSnap.queue_lengths?.[cls] ?? 0;
+                  const pct   = Math.min((depth / maxQ) * 100, 100);
+                  const cs    = CLS_STYLE[cls];
+                  const warn  = pct > 80;
+                  return (
+                    <div key={cls}>
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="flex items-center gap-1.5 text-xs font-semibold text-gray-700">
+                          <span className={`w-2 h-2 rounded-full ${cs.dot}`} />
+                          {cs.label}
+                        </span>
+                        <span className={`text-xs font-mono font-bold ${warn ? 'text-red-600' : 'text-gray-700'}`}>
+                          {depth} pkts
+                        </span>
+                      </div>
+                      <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-150 ${
+                            warn ? 'bg-red-400' : cs.bar
+                          }`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* In-service indicator */}
+                {latestSnap.in_service && (() => {
+                  const svc = latestSnap.in_service;
+                  const cs  = CLS_STYLE[svc.traffic_class];
+                  return (
+                    <div className={`mt-3 px-3 py-2 rounded-lg border ${cs.border} ${cs.bg} flex items-center justify-between`}>
+                      <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">Transmitting</span>
+                      <span className={`text-xs font-semibold ${cs.text}`}>
+                        {cs.label} · {svc.payload_bytes} B
+                      </span>
+                    </div>
+                  );
+                })()}
+
+                {/* Sim time */}
+                <p className="text-[10px] font-mono text-gray-400 text-right">
+                  t = {(latestSnap.sim_time_us / 1000).toFixed(1)} ms
+                </p>
+              </div>
+            ) : (
+              <div className="flex items-center justify-center h-24 text-sm text-gray-400">
+                Waiting for first tick…
+              </div>
+            )}
+          </div>
+
+          {/* Right: per-policy progress + drop counters */}
+          <div className="space-y-4">
+            {/* Progress bars */}
+            <div className="bg-white border border-gray-200 rounded-xl p-4">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">
+                Completion Progress
+              </p>
+              <div className="space-y-3">
+                {policies.map((p) => {
+                  const ps = POLICY_STYLE[p];
+                  const pct = progress[p];
+                  const cnt = liveCounters[p];
+                  return (
+                    <div key={p}>
+                      <div className="flex justify-between items-baseline mb-1">
+                        <span className={`text-xs font-bold ${ps.text}`}>{ps.short}</span>
+                        <span className="text-[10px] font-mono text-gray-500">
+                          {cnt.admitted > 0 && (
+                            <>{cnt.admitted.toLocaleString()} enqueued · <span className="text-red-500">{cnt.dropped.toLocaleString()} dropped</span></>
+                          )}
+                          {cnt.admitted === 0 && 'pending'}
+                        </span>
+                      </div>
+                      <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-200 ${ps.bar}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Aggregate counters */}
+            <div className="bg-white border border-gray-200 rounded-xl p-4">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">
+                Aggregate Packet Accounting
+              </p>
+              <div className="grid grid-cols-3 gap-3">
+                <Stat label="Generated" value={totalPackets.toLocaleString()} sub="workload" color="text-gray-800" />
+                <Stat label="Enqueued"  value={totalAdmitted.toLocaleString()} sub="all policies" color="text-blue-700" />
+                <Stat label="Dropped"   value={totalDropped.toLocaleString()}  sub="tail-drop"   color="text-red-600"  />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Live event log ─────────────────────────────────────────────── */}
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">
+            Packet Event Log  <span className="font-normal normal-case text-gray-400">(latest {liveEvents.length} events)</span>
+          </p>
+          {liveEvents.length === 0 ? (
+            <div className="text-xs text-gray-400 italic">Waiting for packet events…</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-[11px] font-mono">
+                <thead>
+                  <tr className="border-b border-gray-100">
+                    <th className="text-left py-1 pr-3 font-semibold text-gray-400 w-12">Event</th>
+                    <th className="text-left py-1 pr-3 font-semibold text-gray-400 w-12">Policy</th>
+                    <th className="text-left py-1 pr-3 font-semibold text-gray-400 w-20">Class</th>
+                    <th className="text-right py-1 pr-3 font-semibold text-gray-400 w-16">Size</th>
+                    <th className="text-right py-1 font-semibold text-gray-400">Arrival (ms)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...liveEvents].reverse().map((ev) => {
+                    const cs = CLS_STYLE[ev.cls] ?? { text: 'text-gray-500', dot: 'bg-gray-400', label: ev.cls };
+                    const es = EVENT_STYLE[ev.event] ?? { label: ev.event.toUpperCase(), color: 'text-gray-500' };
+                    const ps = POLICY_STYLE[ev.policy] ?? { short: ev.policy.toUpperCase(), text: 'text-gray-500' };
+                    return (
+                      <tr key={ev.id} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                        <td className={`py-1 pr-3 font-bold ${es.color}`}>{es.label}</td>
+                        <td className={`py-1 pr-3 ${ps.text}`}>{ps.short}</td>
+                        <td className="py-1 pr-3">
+                          <span className="flex items-center gap-1">
+                            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${cs.dot}`} />
+                            <span className={cs.text}>{cs.label}</span>
+                          </span>
+                        </td>
+                        <td className="py-1 pr-3 text-right text-gray-600">{ev.bytes} B</td>
+                        <td className="py-1 text-right text-gray-500">{(ev.time_us / 1000).toFixed(2)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+// ── tiny helper ───────────────────────────────────────────────────────────────
+function Stat({ label, value, sub, color }: { label: string; value: string; sub: string; color: string }) {
+  return (
+    <div className="text-center">
+      <div className={`text-xl font-black font-mono ${color}`}>{value}</div>
+      <div className="text-[10px] font-semibold text-gray-600 mt-0.5">{label}</div>
+      <div className="text-[9px] text-gray-400">{sub}</div>
     </div>
   );
 }
